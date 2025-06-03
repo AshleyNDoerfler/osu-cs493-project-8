@@ -3,6 +3,24 @@
  */
 
 const { Router } = require('express')
+const multer = require('multer');
+const crypto = require('crypto');
+
+const imageTypes = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png'
+};
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: `${__dirname}/uploads`,
+    filename: (req, file, callback) => {
+      const filename = crypto.pseudoRandomBytes(16).toString('hex');
+      const extension = imageTypes[file.mimetype];
+      callback(null, `${filename}.${extension}`);
+    }
+  })
+});
 
 const { validateAgainstSchema } = require('../lib/validation')
 const {
@@ -16,10 +34,10 @@ const router = Router()
 /*
  * POST /photos - Route to create a new photo.
  */
-router.post('/', async (req, res) => {
+router.post('/', upload.single('image'), async (req, res) => {
   if (validateAgainstSchema(req.body, PhotoSchema)) {
     try {
-      const id = await insertNewPhoto(req.body)
+      const id = await insertNewPhoto(req.body, req.file)
       res.status(201).send({
         id: id,
         links: {
@@ -58,5 +76,12 @@ router.get('/:id', async (req, res, next) => {
     })
   }
 })
+
+router.use('*', (err, req, res, next) => {
+  console.error(err);
+  res.status(500).send({
+    err: "An error occurred. Try again later."
+  });
+});
 
 module.exports = router
