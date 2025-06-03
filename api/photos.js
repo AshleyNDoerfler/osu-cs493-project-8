@@ -5,10 +5,18 @@
 const { Router } = require('express')
 const multer = require('multer');
 const crypto = require('crypto');
+const { ObjectId, GridFSBucket } = require('mongodb');
+const fs = require('fs');
+const { getDBReference } = require('../lib/mongo');
 
 const imageTypes = {
   'image/jpeg': 'jpg',
   'image/png': 'png'
+};
+
+const metadata = {
+  contentType: image.contentType,
+  userId: image.userId
 };
 
 const upload = multer({
@@ -31,13 +39,81 @@ const {
 
 const router = Router()
 
+function saveImageFile(image) {
+  return new Promise((resolve, reject) => {
+    const db = getDBReference();
+    const bucket =
+      new GridFSBucket(db, { bucketName: 'images' });
+
+    const uploadStream = bucket.openUploadStream(
+      image.filename,
+      { metadata: metadata }
+    );
+
+    return new Promise((resolve, reject) => {
+      fs.createReadStream(image.path)
+        .pipe(uploadStream)
+        .on('error', (err) => {
+          reject(err);
+        })
+        .on('finish', (result) => {
+          resolve(result._id);
+        });
+    });
+  });
+}
+
+function removeUploadedFile(file) {
+  return new Promise((resolve, reject) => {
+    fs.unlink(file.path, (err) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
+async function getImageInfoById(){
+  try {
+    const bucket =
+      new GridFSBucket(db, { bucketName: 'images' });
+    const results =
+      await bucket.find({ _id: new ObjectId(id) }).toArray();
+    if (image) {
+      const responseBody = {
+        _id: image._id,
+        url: `/media/images/${image.filename}`,
+        contentType: image.metadata.contentType,
+        userId: image.metadata.userId,
+      };
+      
+      res.status(200).send(responseBody);
+    } else {
+      next();
+    }
+    } catch (err) {
+      next(err);
+    }
+}
+
+function getImageDownloadStreamByFilename(filename) {
+  const db = getDBReference();
+  const bucket =
+    new GridFSBucket(db, { bucketName: 'images' });
+  return bucket.openDownloadStreamByName(filename);
+}
+
 /*
  * POST /photos - Route to create a new photo.
  */
 router.post('/', upload.single('image'), async (req, res) => {
   if (validateAgainstSchema(req.body, PhotoSchema)) {
     try {
-      const id = await insertNewPhoto(req.body, req.file)
+      const id = await saveImageFile(image);
+      await removeUploadedFile(req.file);
+
       res.status(201).send({
         id: id,
         links: {
