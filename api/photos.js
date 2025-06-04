@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { ObjectId, GridFSBucket } = require('mongodb');
 const fs = require('fs');
 const { getDBReference } = require('../lib/mongo');
+const { getChannel } = require('../lib/rabbitmq')
 
 const imageTypes = {
   'image/jpeg': 'jpg',
@@ -119,6 +120,13 @@ router.post('/', upload.single('image'), async (req, res) => {
       };      
 
       const id = await saveImageFile(image);
+
+      const channel = await getChannel();
+      channel.sendToQueue(
+        'photos',
+        Buffer.from(JSON.stringify({ photoId: id.toString() }))
+      );
+
       await removeUploadedFile(req.file);
 
       res.status(201).send({
@@ -175,6 +183,16 @@ router.get('/media/images/:filename', (req, res, next) => {
     .pipe(res);
 });
 
+router.get('/thumbs/:id.jpg', async (req, res) => {
+  const db = getDBReference();
+  const photoId = new ObjectId(req.params.id);
+  const photo = await db.collection('images.files').findOne({ _id: photoId });
+  if (!photo || !photo.metadata || !photo.metadata.thumbId) {
+    return res.status(404).send({ error: 'Thumbnail not found' });
+  }
+  const thumbBucket = new GridFSBucket(db, { bucketName: 'thumbs' });
+  thumbBucket.openDownloadStream(photo.metadata.thumbId).pipe(res);
+});
 
 router.use('*', (err, req, res, next) => {
   console.error(err);
