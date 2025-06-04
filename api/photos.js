@@ -14,11 +14,6 @@ const imageTypes = {
   'image/png': 'png'
 };
 
-const metadata = {
-  contentType: image.contentType,
-  userId: image.userId
-};
-
 const upload = multer({
   storage: multer.diskStorage({
     destination: `${__dirname}/uploads`,
@@ -33,32 +28,33 @@ const upload = multer({
 const { validateAgainstSchema } = require('../lib/validation')
 const {
   PhotoSchema,
-  insertNewPhoto,
-  getPhotoById
 } = require('../models/photo')
 
 const router = Router()
 
 function saveImageFile(image) {
-  return new Promise((resolve, reject) => {
-    const db = getDBReference();
-    const bucket =
-      new GridFSBucket(db, { bucketName: 'images' });
+  const db = getDBReference();
+  const bucket =
+    new GridFSBucket(db, { bucketName: 'images' });
 
+  const metadata = {
+    contentType: image.contentType,
+    userId: image.userId,
+    businessId: image.businessId
+  };
+
+  return new Promise((resolve, reject) => {
     const uploadStream = bucket.openUploadStream(
       image.filename,
       { metadata: metadata }
     );
-
-    return new Promise((resolve, reject) => {
-      fs.createReadStream(image.path)
-        .pipe(uploadStream)
-        .on('error', (err) => {
-          reject(err);
-        })
-        .on('finish', (result) => {
-          resolve(result._id);
-        });
+    fs.createReadStream(image.path)
+      .pipe(uploadStream)
+      .on('error', (err) => {
+        reject(err);
+      })
+      .on('finish', (result) => {
+        resolve(result._id);
     });
   });
 }
@@ -75,21 +71,24 @@ function removeUploadedFile(file) {
   });
 }
 
-async function getImageInfoById(){
+async function getImageInfoById(id){
   try {
+    const db = getDBReference();
     const bucket =
       new GridFSBucket(db, { bucketName: 'images' });
     const results =
       await bucket.find({ _id: new ObjectId(id) }).toArray();
+    image = results[0];
     if (image) {
       const responseBody = {
         _id: image._id,
-        url: `/media/images/${image.filename}`,
+        url: `/media/images/${image._id.toString()}.${extension}`,
         contentType: image.metadata.contentType,
+        businessId: image.metadata.businessId,
         userId: image.metadata.userId,
       };
       
-      res.status(200).send(responseBody);
+      return responseBody;
     } else {
       next();
     }
@@ -111,6 +110,14 @@ function getImageDownloadStreamByFilename(filename) {
 router.post('/', upload.single('image'), async (req, res) => {
   if (validateAgainstSchema(req.body, PhotoSchema)) {
     try {
+      const image = {
+        path: req.file.path,
+        filename: req.file.filename,
+        contentType: req.file.mimetype,
+        userId: req.body.userId,
+        businessId: req.body.businessId
+      };      
+
       const id = await saveImageFile(image);
       await removeUploadedFile(req.file);
 
@@ -139,7 +146,7 @@ router.post('/', upload.single('image'), async (req, res) => {
  */
 router.get('/:id', async (req, res, next) => {
   try {
-    const photo = await getPhotoById(req.params.id)
+    const photo = await getImageInfoById(req.params.id)
     if (photo) {
       res.status(200).send(photo)
     } else {
@@ -152,6 +159,22 @@ router.get('/:id', async (req, res, next) => {
     })
   }
 })
+
+router.get('/media/images/:filename', (req, res, next) => {
+  getImageDownloadStreamByFilename(req.params.filename)
+    .on('file', (file) => {
+      res.status(200).type(file.metadata.contentType);
+    })
+    .on('error', (err) => {
+      if (err.code === 'ENOENT') {
+        next();
+      } else {
+        next(err);
+      }
+    })
+    .pipe(res);
+});
+
 
 router.use('*', (err, req, res, next) => {
   console.error(err);

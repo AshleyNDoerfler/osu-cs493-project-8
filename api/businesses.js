@@ -12,6 +12,9 @@ const {
   getBusinessById
 } = require('../models/business')
 
+const { getDBReference } = require('../lib/mongo');
+const { GridFSBucket, ObjectId } = require('mongodb');
+
 const router = Router()
 
 /*
@@ -70,11 +73,29 @@ router.post('/', async (req, res) => {
  */
 router.get('/:id', async (req, res, next) => {
   try {
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).send({ error: "Invalid business ID format" });
+    }
+
     const business = await getBusinessById(req.params.id)
-    if (business) {
-      res.status(200).send(business)
-    } else {
+
+    if (!business) {
       next()
+    } else {
+      const db = getDBReference();
+      const bucket = new GridFSBucket(db, { bucketName: 'images' });
+
+      const photos = await bucket.find({ "metadata.businessId": req.params.id }).toArray();
+
+      business.photos = photos.map(image => {
+        const ext = image.metadata.contentType === 'image/png' ? 'png' : 'jpg';
+        return {
+          _id: image._id,
+          url: `/media/photos/${image._id.toString()}.${ext}`
+        };
+      });
+  
+      res.status(200).send(business);
     }
   } catch (err) {
     console.error(err)
